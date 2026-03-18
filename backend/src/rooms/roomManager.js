@@ -76,7 +76,6 @@ function startRound(room, io) {
   room.round += 1;
   room.correctGuessers = new Set();
   room.revealedIndices = new Set();
-  room.strokes = [];
   room.currentWord = getRandomWord();
   room.status = "playing";
 
@@ -85,17 +84,21 @@ function startRound(room, io) {
 
   const hint = getWordHint(room.currentWord, room.revealedIndices);
 
-  // Send word only to drawer
-  io.to(drawer.id).emit("your_word", { word: room.currentWord });
+  // Send word to drawer inside start_round so there's no race condition
+  const isDrawerConnected = !!drawer.id;
 
-  // Send round start to everyone
-  io.to(room.roomId).emit("start_round", {
-    drawer: drawer.username,
-    wordLength: room.currentWord.length,
-    hint,
-    round: room.round,
-    maxRounds: room.maxRounds,
-    timeLeft: ROUND_DURATION,
+  // Send start_round to everyone - drawer gets word, others get null
+  room.players.forEach((player) => {
+    const isThisDrawer = player.username === drawer.username;
+    io.to(player.id).emit("start_round", {
+      drawer: drawer.username,
+      wordLength: room.currentWord.length,
+      hint,
+      round: room.round,
+      maxRounds: room.maxRounds,
+      timeLeft: ROUND_DURATION,
+      myWord: isThisDrawer ? room.currentWord : null, // only drawer gets the word
+    });
   });
 
   // Hint reveal timer

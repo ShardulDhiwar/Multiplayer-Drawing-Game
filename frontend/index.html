@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>🎨 Skribbl Clone</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; overflow-x: hidden; }
+      body { font-family: system-ui, -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
+      button { -webkit-tap-highlight-color: transparent; }
+      /* Prevent text selection during drawing */
+      canvas { user-select: none; -webkit-user-select: none; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
