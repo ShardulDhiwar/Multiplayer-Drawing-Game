@@ -18,7 +18,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173", // Vite default port
+    origin: "*", // Vite default port
     methods: ["GET", "POST"],
   },
   // Reconnection support
