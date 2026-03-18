@@ -119,7 +119,7 @@ function LobbyScreen({ onCreate, onJoin, error }) {
             <Pencil size={36} color="#1a1f2e" strokeWidth={2.5} />
           </div>
           <h1 style={{ fontFamily: T.fontDisplay, fontSize: 42, color: T.text, lineHeight: 1 }}>
-            Skribbl Clone
+            Scribzy
           </h1>
           <p style={{ color: T.muted, fontSize: 14, marginTop: 6 }}>Draw, guess & have fun!</p>
         </div>
