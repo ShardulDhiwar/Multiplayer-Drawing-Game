@@ -19,6 +19,11 @@ function getRandomWord() {
   return WORDS[Math.floor(Math.random() * WORDS.length)];
 }
 
+function getThreeWords() {
+  const shuffled = [...WORDS].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, 3);
+}
+
 function getWordHint(word, revealedIndices) {
   return word
     .split("")
@@ -35,4 +40,4 @@ function getNextRevealIndex(word, revealedIndices) {
   return hiddenIndices[Math.floor(Math.random() * hiddenIndices.length)];
 }
 
-module.exports = { getRandomWord, getWordHint, getNextRevealIndex };
+module.exports = { getRandomWord, getThreeWords, getWordHint, getNextRevealIndex };

@@ -18,6 +18,8 @@ export function useGame() {
     maxRounds: 3,
     timeLeft: 80,
     myWord: null,
+    wordChoices: null,   // only set for drawer during choosing phase
+    pickTimeLeft: 15,    // countdown for word selection
   });
   const [error, setError] = useState(null);
 
@@ -41,6 +43,37 @@ export function useGame() {
       setPlayers(players);
     });
 
+    // Drawer receives 3 word choices
+    socket.on("choose_word", ({ choices, timeLeft, round, maxRounds }) => {
+      setScreen("game");
+      setGameState((g) => ({
+        ...g,
+        status: "choosing",
+        drawer: usernameRef.current, // drawer is the current user
+        wordChoices: choices,
+        pickTimeLeft: timeLeft,
+        round,
+        maxRounds,
+        myWord: null,
+        hint: null,
+      }));
+    });
+
+    // Guessers wait while drawer picks
+    socket.on("waiting_for_word", ({ drawer, round, maxRounds }) => {
+      setScreen("game");
+      setGameState((g) => ({
+        ...g,
+        status: "choosing",
+        drawer,
+        round,
+        maxRounds,
+        wordChoices: null,
+        myWord: null,
+        hint: null,
+      }));
+    });
+
     socket.on("start_round", ({ drawer, wordLength, hint, round, maxRounds, timeLeft, myWord }) => {
       setScreen("game");
       setGameState((g) => ({
@@ -52,7 +85,8 @@ export function useGame() {
         round,
         maxRounds,
         timeLeft,
-        myWord: myWord || null, // set for drawer, null for guessers
+        myWord: myWord || null,
+        wordChoices: null,
       }));
       addMessage({ type: "system", text: `Round ${round}/${maxRounds} – ${drawer} is drawing!` });
     });
@@ -144,14 +178,12 @@ export function useGame() {
     socket.emit("clear_canvas");
   }, []);
 
+  const pickWord = useCallback((word) => {
+    socket.emit("pick_word", { word });
+  }, []);
+
   return {
-    screen,
-    roomId,
-    username,
-    players,
-    messages,
-    gameState,
-    error,
-    actions: { createRoom, joinRoom, startGame, sendMessage, sendStroke, clearCanvas },
+    screen, roomId, username, players, messages, gameState, error,
+    actions: { createRoom, joinRoom, startGame, sendMessage, sendStroke, clearCanvas, pickWord },
   };
 }

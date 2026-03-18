@@ -1,5 +1,5 @@
 // src/rooms/roomManager.js
-const { getRandomWord, getWordHint, getNextRevealIndex } = require("../games/words");
+const { getThreeWords, getWordHint, getNextRevealIndex } = require("../games/words");
 
 const rooms = new Map(); // roomId -> Room
 
@@ -67,6 +67,8 @@ function getDrawer(room) {
   return room.players[room.drawerIndex % room.players.length];
 }
 
+const WORD_PICK_DURATION = 15; // seconds to pick a word
+
 function startRound(room, io) {
   if (room.round >= room.maxRounds) {
     endGame(room, io);
@@ -76,7 +78,47 @@ function startRound(room, io) {
   room.round += 1;
   room.correctGuessers = new Set();
   room.revealedIndices = new Set();
-  room.currentWord = getRandomWord();
+  room.currentWord = null;
+  room.status = "choosing";
+
+  const drawer = getDrawer(room);
+  if (!drawer) return;
+
+  const wordChoices = getThreeWords();
+  room.wordChoices = wordChoices;
+
+  // Send choices only to drawer
+  io.to(drawer.id).emit("choose_word", {
+    choices: wordChoices,
+    timeLeft: WORD_PICK_DURATION,
+    round: room.round,
+    maxRounds: room.maxRounds,
+  });
+
+  // Tell everyone else the drawer is choosing
+  room.players.forEach((player) => {
+    if (player.username !== drawer.username) {
+      io.to(player.id).emit("waiting_for_word", {
+        drawer: drawer.username,
+        round: room.round,
+        maxRounds: room.maxRounds,
+      });
+    }
+  });
+
+  // Auto-pick if drawer doesn't choose in time
+  room.pickTimer = setTimeout(() => {
+    if (room.status === "choosing") {
+      const autoWord = wordChoices[Math.floor(Math.random() * wordChoices.length)];
+      beginRound(room, io, autoWord);
+    }
+  }, WORD_PICK_DURATION * 1000);
+}
+
+function beginRound(room, io, word) {
+  clearTimeout(room.pickTimer);
+  room.currentWord = word;
+  room.wordChoices = null;
   room.status = "playing";
 
   const drawer = getDrawer(room);
@@ -84,10 +126,7 @@ function startRound(room, io) {
 
   const hint = getWordHint(room.currentWord, room.revealedIndices);
 
-  // Send word to drawer inside start_round so there's no race condition
-  const isDrawerConnected = !!drawer.id;
-
-  // Send start_round to everyone - drawer gets word, others get null
+  // Send start_round to everyone - drawer gets word, others get hint
   room.players.forEach((player) => {
     const isThisDrawer = player.username === drawer.username;
     io.to(player.id).emit("start_round", {
@@ -97,7 +136,7 @@ function startRound(room, io) {
       round: room.round,
       maxRounds: room.maxRounds,
       timeLeft: ROUND_DURATION,
-      myWord: isThisDrawer ? room.currentWord : null, // only drawer gets the word
+      myWord: isThisDrawer ? room.currentWord : null,
     });
   });
 
@@ -129,6 +168,7 @@ function startRound(room, io) {
 function endRound(room, io) {
   clearInterval(room.timer);
   clearInterval(room.hintTimer);
+  clearTimeout(room.pickTimer);
 
   io.to(room.roomId).emit("round_ended", {
     word: room.currentWord,
@@ -195,12 +235,7 @@ function handleGuess(room, io, { socketId, username, text }) {
 }
 
 module.exports = {
-  createRoom,
-  getRoom,
-  deleteRoom,
-  addPlayer,
-  removePlayer,
-  getDrawer,
-  startRound,
-  handleGuess,
+  createRoom, getRoom, deleteRoom,
+  addPlayer, removePlayer, getDrawer,
+  startRound, beginRound, handleGuess,
 };

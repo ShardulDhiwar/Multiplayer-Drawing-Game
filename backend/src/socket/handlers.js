@@ -1,13 +1,8 @@
 // src/socket/handlers.js
 const {
-  createRoom,
-  getRoom,
-  deleteRoom,
-  addPlayer,
-  removePlayer,
-  getDrawer,
-  startRound,
-  handleGuess,
+  createRoom, getRoom, deleteRoom,
+  addPlayer, removePlayer, getDrawer,
+  startRound, beginRound, handleGuess,
 } = require("../rooms/roomManager");
 
 function generateRoomId() {
@@ -79,7 +74,20 @@ module.exports = function registerHandlers(io) {
       startRound(room, io);
     });
 
-    // ─── Drawing ───────────────────────────────────────────────
+    // ─── Pick Word ─────────────────────────────────────────────
+    socket.on("pick_word", ({ word }) => {
+      const { roomId } = socket.data;
+      const room = getRoom(roomId);
+      if (!room || room.status !== "choosing") return;
+
+      const drawer = getDrawer(room);
+      if (!drawer || drawer.id !== socket.id) return; // only drawer can pick
+
+      // Make sure the word is one of the offered choices
+      if (!room.wordChoices || !room.wordChoices.includes(word)) return;
+
+      beginRound(room, io, word);
+    });
     socket.on("draw", (stroke) => {
       const { roomId } = socket.data;
       const room = getRoom(roomId);
