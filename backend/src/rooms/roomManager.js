@@ -15,9 +15,10 @@ function createRoom(roomId) {
     currentWord: null,
     round: 0,
     maxRounds: MAX_ROUNDS,
-    status: "waiting",    // waiting | playing | ended
+    status: "waiting",    // waiting | playing | choosing | ended
     timer: null,
     hintTimer: null,
+    pickTimer: null,
     revealedIndices: new Set(),
     correctGuessers: new Set(),
   });
@@ -33,6 +34,7 @@ function deleteRoom(roomId) {
   if (room) {
     clearInterval(room.timer);
     clearInterval(room.hintTimer);
+    clearTimeout(room.pickTimer);
   }
   rooms.delete(roomId);
 }
@@ -192,6 +194,41 @@ function endGame(room, io) {
   io.to(room.roomId).emit("end_game", { finalScores: sorted });
 }
 
+// ── Play Again ────────────────────────────────────────────────────────────────
+
+function resetRoom(room) {
+  clearInterval(room.timer);
+  clearInterval(room.hintTimer);
+  clearTimeout(room.pickTimer);
+
+  room.drawerIndex = 0;
+  room.currentWord = null;
+  room.wordChoices = null;
+  room.round = 0;
+  room.status = "waiting";
+  room.timer = null;
+  room.hintTimer = null;
+  room.pickTimer = null;
+  room.revealedIndices = new Set();
+  room.correctGuessers = new Set();
+
+  // Reset all scores
+  room.players.forEach((p) => { p.score = 0; });
+}
+
+function playAgain(room, io) {
+  resetRoom(room);
+
+  io.to(room.roomId).emit("play_again_starting", {
+    players: room.players.map(({ username, score }) => ({ username, score })),
+  });
+
+  // Small delay so clients can show a "restarting" message before round 1
+  setTimeout(() => startRound(room, io), 2000);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function handleGuess(room, io, { socketId, username, text }) {
   if (!room.currentWord) return;
   const drawer = getDrawer(room);
@@ -237,5 +274,7 @@ function handleGuess(room, io, { socketId, username, text }) {
 module.exports = {
   createRoom, getRoom, deleteRoom,
   addPlayer, removePlayer, getDrawer,
-  startRound, beginRound, handleGuess,
+  startRound, beginRound, endRound,
+  endGame, resetRoom, playAgain,
+  handleGuess,
 };

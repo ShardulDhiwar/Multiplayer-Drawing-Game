@@ -3,6 +3,7 @@ const {
   createRoom, getRoom, deleteRoom,
   addPlayer, removePlayer, getDrawer,
   startRound, beginRound, handleGuess,
+  playAgain,
 } = require("../rooms/roomManager");
 
 function generateRoomId() {
@@ -35,6 +36,7 @@ module.exports = function registerHandlers(io) {
       if (!room) {
         return callback({ success: false, error: "Room not found" });
       }
+      // Allow joining ended rooms so play-again works for late rejoins
       if (room.status === "ended") {
         return callback({ success: false, error: "Game already ended" });
       }
@@ -74,6 +76,14 @@ module.exports = function registerHandlers(io) {
       startRound(room, io);
     });
 
+    // ─── Play Again ────────────────────────────────────────────
+    socket.on("play_again", () => {
+      const { roomId } = socket.data;
+      const room = getRoom(roomId);
+      if (!room || room.status !== "ended") return;
+      playAgain(room, io);
+    });
+
     // ─── Pick Word ─────────────────────────────────────────────
     socket.on("pick_word", ({ word }) => {
       const { roomId } = socket.data;
@@ -81,23 +91,46 @@ module.exports = function registerHandlers(io) {
       if (!room || room.status !== "choosing") return;
 
       const drawer = getDrawer(room);
-      if (!drawer || drawer.id !== socket.id) return; // only drawer can pick
-
-      // Make sure the word is one of the offered choices
+      if (!drawer || drawer.id !== socket.id) return;
       if (!room.wordChoices || !room.wordChoices.includes(word)) return;
 
       beginRound(room, io, word);
     });
+
+    // ─── Draw ──────────────────────────────────────────────────
     socket.on("draw", (stroke) => {
       const { roomId } = socket.data;
       const room = getRoom(roomId);
       if (!room) return;
 
       const drawer = getDrawer(room);
-      if (!drawer || drawer.id !== socket.id) return; // only drawer can draw
+      if (!drawer || drawer.id !== socket.id) return;
 
-      // Broadcast to other players
       socket.to(roomId).emit("draw", stroke);
+    });
+
+    // ─── Fill Canvas ───────────────────────────────────────────
+    socket.on("fill_canvas", ({ x, y, color }) => {
+      const { roomId } = socket.data;
+      const room = getRoom(roomId);
+      if (!room) return;
+
+      const drawer = getDrawer(room);
+      if (!drawer || drawer.id !== socket.id) return;
+
+      socket.to(roomId).emit("fill_canvas", { x, y, color });
+    });
+
+    // ─── Undo Canvas ───────────────────────────────────────────
+    socket.on("undo_canvas", ({ dataUrl }) => {
+      const { roomId } = socket.data;
+      const room = getRoom(roomId);
+      if (!room) return;
+
+      const drawer = getDrawer(room);
+      if (!drawer || drawer.id !== socket.id) return;
+
+      socket.to(roomId).emit("undo_canvas", { dataUrl });
     });
 
     // ─── Clear Canvas ──────────────────────────────────────────
@@ -132,7 +165,6 @@ module.exports = function registerHandlers(io) {
       console.log(`${username} disconnected from ${roomId}`);
 
       if (connected.length === 0) {
-        // Clean up empty rooms after grace period
         setTimeout(() => {
           const r = getRoom(roomId);
           if (r && r.players.filter((p) => p.connected).length === 0) {
