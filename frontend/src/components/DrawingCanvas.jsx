@@ -364,6 +364,7 @@ export default function DrawingCanvas({ isDrawer, registerCanvasSync, sendCanvas
         border: `1.5px solid ${T.border}`,
         boxShadow: isDrawer ? `0 0 0 2px ${T.accent}33, 0 8px 30px rgba(0,0,0,0.4)` : "0 8px 30px rgba(0,0,0,0.4)",
         transition: "box-shadow 0.3s",
+        width: "100%",
       }}>
         <canvas
           ref={canvasRef}
@@ -378,7 +379,7 @@ export default function DrawingCanvas({ isDrawer, registerCanvasSync, sendCanvas
                   ? "crosshair"
                   : "crosshair"
               : "default",
-            width: "100%", maxWidth: 700, touchAction: "none",
+            width: "100%", touchAction: "none",
           }}
           onMouseDown={onPointerDown} onMouseMove={onPointerMove}
           onMouseUp={onPointerUp} onMouseLeave={onPointerUp}
