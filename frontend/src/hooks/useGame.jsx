@@ -16,25 +16,28 @@ export function useGame() {
     hint: null,
     round: 0,
     maxRounds: 3,
+    game: 0,
+    gamesPerRound: 5,
     timeLeft: 80,
     myWord: null,
-    wordChoices: null,   // only set for drawer during choosing phase
-    pickTimeLeft: 15,    // countdown for word selection
+    wordChoices: null,
+    pickTimeLeft: 15,
   });
   const [error, setError] = useState(null);
 
-  // useRef so addMessage never changes identity → useEffect runs only once
   const setMessagesRef = useRef(setMessages);
   const addMessage = useCallback((msg) => {
     setMessagesRef.current((prev) => [...prev.slice(-100), msg]);
   }, []);
 
-  // ── Connect & register listeners (runs ONCE) ──────────────
+  // canvas_sync callback — set by DrawingCanvas via ref
+  const canvasSyncRef = useRef(null);
+
   useEffect(() => {
     socket.connect();
 
     socket.on("player_joined", ({ username, players }) => {
-      addMessage({ type: "system", text: `${username} joined the room` });
+      addMessage({ type: "system", text: `${username} joined` });
       setPlayers(players);
     });
 
@@ -43,52 +46,44 @@ export function useGame() {
       setPlayers(players);
     });
 
-    // Drawer receives 3 word choices
-    socket.on("choose_word", ({ choices, timeLeft, round, maxRounds }) => {
+    socket.on("choose_word", ({ choices, timeLeft, round, maxRounds, game, gamesPerRound }) => {
       setScreen("game");
       setGameState((g) => ({
         ...g,
         status: "choosing",
-        drawer: usernameRef.current, // drawer is the current user
+        drawer: usernameRef.current,
         wordChoices: choices,
         pickTimeLeft: timeLeft,
-        round,
-        maxRounds,
-        myWord: null,
-        hint: null,
+        round, maxRounds, game, gamesPerRound,
+        myWord: null, hint: null,
       }));
     });
 
-    // Guessers wait while drawer picks
-    socket.on("waiting_for_word", ({ drawer, round, maxRounds }) => {
+    socket.on("waiting_for_word", ({ drawer, round, maxRounds, game, gamesPerRound }) => {
       setScreen("game");
       setGameState((g) => ({
         ...g,
         status: "choosing",
-        drawer,
-        round,
-        maxRounds,
-        wordChoices: null,
-        myWord: null,
-        hint: null,
+        drawer, round, maxRounds, game, gamesPerRound,
+        wordChoices: null, myWord: null, hint: null,
       }));
     });
 
-    socket.on("start_round", ({ drawer, wordLength, hint, round, maxRounds, timeLeft, myWord }) => {
+    socket.on("start_round", ({ drawer, wordLength, hint, round, maxRounds, game, gamesPerRound, timeLeft, myWord }) => {
       setScreen("game");
       setGameState((g) => ({
         ...g,
         status: "playing",
-        drawer,
-        wordLength,
-        hint,
-        round,
-        maxRounds,
-        timeLeft,
+        drawer, wordLength, hint, round, maxRounds, game, gamesPerRound, timeLeft,
         myWord: myWord || null,
         wordChoices: null,
       }));
-      addMessage({ type: "system", text: `Round ${round}/${maxRounds} – ${drawer} is drawing!` });
+      addMessage({ type: "system", text: `Round ${round}/${maxRounds} · Turn ${game}/${gamesPerRound} – ${drawer} is drawing!` });
+    });
+
+    // Late-join: restore canvas to current state
+    socket.on("canvas_sync", ({ dataUrl }) => {
+      if (canvasSyncRef.current) canvasSyncRef.current(dataUrl);
     });
 
     socket.on("hint_update", ({ hint }) => {
@@ -104,15 +99,12 @@ export function useGame() {
     });
 
     socket.on("correct_guess", ({ username, points, scores }) => {
-      addMessage({
-        type: "correct",
-        text: `🎉 ${username} guessed correctly! (+${points} pts)`,
-      });
+      addMessage({ type: "correct", text: `🎉 ${username} guessed correctly! (+${points} pts)` });
       setPlayers(scores);
     });
 
     socket.on("round_ended", ({ word, scores }) => {
-      addMessage({ type: "system", text: `Round ended! The word was "${word}"` });
+      addMessage({ type: "system", text: `Turn ended! The word was "${word}"` });
       setPlayers(scores);
       setGameState((g) => ({ ...g, status: "between_rounds", myWord: null }));
     });
@@ -120,6 +112,22 @@ export function useGame() {
     socket.on("end_game", ({ finalScores }) => {
       setPlayers(finalScores);
       setScreen("end");
+    });
+
+    socket.on("play_again_starting", ({ players }) => {
+      setPlayers(players);
+      setMessages([]);
+      setGameState({
+        status: "waiting",
+        drawer: null, wordLength: null, hint: null,
+        round: 0, maxRounds: 3, game: 0, gamesPerRound: 5,
+        timeLeft: 80, myWord: null, wordChoices: null, pickTimeLeft: 15,
+      });
+      setScreen("restarting");
+    });
+
+    socket.on("waiting_for_players", () => {
+      setScreen("waiting");
     });
 
     socket.on("error_msg", ({ message }) => {
@@ -131,7 +139,7 @@ export function useGame() {
     socket.on("connect", () => setError(null));
 
     return () => socket.removeAllListeners();
-  }, []); // ← empty deps: register once, never re-register
+  }, []);
 
   // ── Actions ───────────────────────────────────────────────
   const createRoom = useCallback((name) => {
@@ -141,7 +149,7 @@ export function useGame() {
       if (res.success) {
         setRoomId(res.roomId);
         setPlayers(res.players);
-        setScreen("room");
+        // screen will be set by waiting_for_players or start_round from server
       } else {
         setError(res.error);
       }
@@ -155,35 +163,33 @@ export function useGame() {
       if (res.success) {
         setRoomId(res.roomId);
         setPlayers(res.players);
-        setScreen("room");
+        setScreen("game"); // go straight to game, syncLateJoiner handles the rest
       } else {
         setError(res.error);
       }
     });
   }, []);
 
-  const startGame = useCallback(() => {
-    socket.emit("start_game");
-  }, []);
+  const playAgain = useCallback(() => socket.emit("play_again"), []);
+  const sendMessage = useCallback((text) => socket.emit("send_message", { text }), []);
+  const sendStroke = useCallback((stroke) => socket.emit("draw", stroke), []);
+  const clearCanvas = useCallback(() => socket.emit("clear_canvas"), []);
+  const pickWord = useCallback((word) => socket.emit("pick_word", { word }), []);
 
-  const sendMessage = useCallback((text) => {
-    socket.emit("send_message", { text });
-  }, []);
+  // Called by DrawingCanvas to register its sync callback
+  const registerCanvasSync = useCallback((fn) => { canvasSyncRef.current = fn; }, []);
 
-  const sendStroke = useCallback((stroke) => {
-    socket.emit("draw", stroke);
-  }, []);
-
-  const clearCanvas = useCallback(() => {
-    socket.emit("clear_canvas");
-  }, []);
-
-  const pickWord = useCallback((word) => {
-    socket.emit("pick_word", { word });
+  // Called by DrawingCanvas to push a snapshot to the server (for late joiners)
+  const sendCanvasSnapshot = useCallback((dataUrl) => {
+    socket.emit("canvas_snapshot", { dataUrl });
   }, []);
 
   return {
     screen, roomId, username, players, messages, gameState, error,
-    actions: { createRoom, joinRoom, startGame, sendMessage, sendStroke, clearCanvas, pickWord },
+    actions: {
+      createRoom, joinRoom, playAgain,
+      sendMessage, sendStroke, clearCanvas, pickWord,
+      registerCanvasSync, sendCanvasSnapshot,
+    },
   };
 }

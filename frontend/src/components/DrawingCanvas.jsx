@@ -75,11 +75,12 @@ function floodFill(ctx, startX, startY, fillColor) {
   ctx.putImageData(imageData, 0, 0);
 }
 
-export default function DrawingCanvas({ isDrawer }) {
+export default function DrawingCanvas({ isDrawer, registerCanvasSync, sendCanvasSnapshot }) {
   const canvasRef = useRef(null);
   const isDrawing = useRef(false);
   const lastPos = useRef(null);
-  const historyRef = useRef([]); // array of ImageData snapshots
+  const historyRef = useRef([]);
+  const snapshotTimerRef = useRef(null);
   const [color, setColor] = useState("#f0ede8");
   const [size, setSize] = useState(5);
   const [tool, setTool] = useState("pen");
@@ -156,6 +157,19 @@ export default function DrawingCanvas({ isDrawer }) {
     socket.on("fill_canvas", onFill);
     socket.on("undo_canvas", onUndo);
 
+    // Late-join: restore canvas from snapshot
+    const onCanvasSync = (dataUrl) => {
+      const ctx = canvasRef.current?.getContext("2d");
+      if (!ctx) return;
+      const img = new Image();
+      img.onload = () => {
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.drawImage(img, 0, 0);
+      };
+      img.src = dataUrl;
+    };
+    if (registerCanvasSync) registerCanvasSync(onCanvasSync);
+
     return () => {
       socket.off("start_round", clearCtx);
       socket.off("clear_canvas", clearCtx);
@@ -163,7 +177,7 @@ export default function DrawingCanvas({ isDrawer }) {
       socket.off("fill_canvas", onFill);
       socket.off("undo_canvas", onUndo);
     };
-  }, [clearCtx]);
+  }, [clearCtx, registerCanvasSync]);
 
   const getPos = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
@@ -210,6 +224,16 @@ export default function DrawingCanvas({ isDrawer }) {
     isDrawing.current = false;
     lastPos.current = null;
   }, []);
+
+  // Send canvas snapshot every 3s when drawing (for late-join sync)
+  useEffect(() => {
+    if (!isDrawer || !sendCanvasSnapshot) return;
+    snapshotTimerRef.current = setInterval(() => {
+      const canvas = canvasRef.current;
+      if (canvas) sendCanvasSnapshot(canvas.toDataURL());
+    }, 3000);
+    return () => clearInterval(snapshotTimerRef.current);
+  }, [isDrawer, sendCanvasSnapshot]);
 
   const handleClear = () => {
     clearCtx();

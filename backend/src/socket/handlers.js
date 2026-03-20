@@ -2,8 +2,8 @@
 const {
   createRoom, getRoom, deleteRoom,
   addPlayer, removePlayer, getDrawer,
-  startRound, beginRound, handleGuess,
-  playAgain,
+  startTurn, beginTurn, handleGuess,
+  playAgain, syncLateJoiner,
 } = require("../rooms/roomManager");
 
 function generateRoomId() {
@@ -15,6 +15,7 @@ module.exports = function registerHandlers(io) {
     console.log(`Socket connected: ${socket.id}`);
 
     // ─── Create Room ───────────────────────────────────────────
+    // Creates the room and immediately starts the game
     socket.on("create_room", ({ username }, callback) => {
       const roomId = generateRoomId();
       createRoom(roomId);
@@ -28,60 +29,44 @@ module.exports = function registerHandlers(io) {
         roomId,
         players: room.players.map(({ username, score }) => ({ username, score })),
       });
+
+      // Notify the creator to wait for more players
+      socket.emit("waiting_for_players", {
+        message: "Share the room code — game starts when a second player joins!",
+      });
     });
 
     // ─── Join Room ─────────────────────────────────────────────
+    // Joins and syncs the late joiner to whatever is happening right now
     socket.on("join_room", ({ username, roomId }, callback) => {
       const room = getRoom(roomId);
-      if (!room) {
-        return callback({ success: false, error: "Room not found" });
-      }
-      // Allow joining ended rooms so play-again works for late rejoins
-      if (room.status === "ended") {
-        return callback({ success: false, error: "Game already ended" });
-      }
+      if (!room) return callback({ success: false, error: "Room not found" });
 
       const updatedRoom = addPlayer(roomId, { id: socket.id, username });
       socket.join(roomId);
       socket.data.roomId = roomId;
       socket.data.username = username;
 
+      // Tell everyone else
       socket.to(roomId).emit("player_joined", {
         username,
-        players: updatedRoom.players.map(({ username, score }) => ({
-          username,
-          score,
-        })),
+        players: updatedRoom.players.map(({ username, score }) => ({ username, score })),
       });
 
       callback({
         success: true,
         roomId,
-        players: updatedRoom.players.map(({ username, score }) => ({
-          username,
-          score,
-        })),
+        players: updatedRoom.players.map(({ username, score }) => ({ username, score })),
       });
-    });
 
-    // ─── Start Game ────────────────────────────────────────────
-    socket.on("start_game", () => {
-      const { roomId } = socket.data;
-      const room = getRoom(roomId);
-      if (!room || room.status !== "waiting") return;
-      if (room.players.length < 2) {
-        socket.emit("error_msg", { message: "Need at least 2 players" });
-        return;
+      // If game hasn't started yet and we now have 2+ players, start it
+      const connected = updatedRoom.players.filter((p) => p.connected);
+      if (updatedRoom.status === "waiting" && connected.length >= 2) {
+        startTurn(updatedRoom, io);
+      } else {
+        // Game already running — sync late joiner to current state
+        syncLateJoiner(updatedRoom, socket);
       }
-      startRound(room, io);
-    });
-
-    // ─── Play Again ────────────────────────────────────────────
-    socket.on("play_again", () => {
-      const { roomId } = socket.data;
-      const room = getRoom(roomId);
-      if (!room || room.status !== "ended") return;
-      playAgain(room, io);
     });
 
     // ─── Pick Word ─────────────────────────────────────────────
@@ -89,12 +74,10 @@ module.exports = function registerHandlers(io) {
       const { roomId } = socket.data;
       const room = getRoom(roomId);
       if (!room || room.status !== "choosing") return;
-
       const drawer = getDrawer(room);
       if (!drawer || drawer.id !== socket.id) return;
       if (!room.wordChoices || !room.wordChoices.includes(word)) return;
-
-      beginRound(room, io, word);
+      beginTurn(room, io, word);
     });
 
     // ─── Draw ──────────────────────────────────────────────────
@@ -102,11 +85,20 @@ module.exports = function registerHandlers(io) {
       const { roomId } = socket.data;
       const room = getRoom(roomId);
       if (!room) return;
-
       const drawer = getDrawer(room);
       if (!drawer || drawer.id !== socket.id) return;
-
       socket.to(roomId).emit("draw", stroke);
+    });
+
+    // ─── Canvas Snapshot (for late-join sync) ──────────────────
+    // Drawer periodically sends a snapshot; server stores latest
+    socket.on("canvas_snapshot", ({ dataUrl }) => {
+      const { roomId } = socket.data;
+      const room = getRoom(roomId);
+      if (!room) return;
+      const drawer = getDrawer(room);
+      if (!drawer || drawer.id !== socket.id) return;
+      room.canvasDataUrl = dataUrl;
     });
 
     // ─── Fill Canvas ───────────────────────────────────────────
@@ -114,10 +106,8 @@ module.exports = function registerHandlers(io) {
       const { roomId } = socket.data;
       const room = getRoom(roomId);
       if (!room) return;
-
       const drawer = getDrawer(room);
       if (!drawer || drawer.id !== socket.id) return;
-
       socket.to(roomId).emit("fill_canvas", { x, y, color });
     });
 
@@ -126,10 +116,8 @@ module.exports = function registerHandlers(io) {
       const { roomId } = socket.data;
       const room = getRoom(roomId);
       if (!room) return;
-
       const drawer = getDrawer(room);
       if (!drawer || drawer.id !== socket.id) return;
-
       socket.to(roomId).emit("undo_canvas", { dataUrl });
     });
 
@@ -140,9 +128,16 @@ module.exports = function registerHandlers(io) {
       if (!room) return;
       const drawer = getDrawer(room);
       if (!drawer || drawer.id !== socket.id) return;
-
-      room.strokes = [];
+      room.canvasDataUrl = null;
       io.to(roomId).emit("clear_canvas");
+    });
+
+    // ─── Play Again ────────────────────────────────────────────
+    socket.on("play_again", () => {
+      const { roomId } = socket.data;
+      const room = getRoom(roomId);
+      if (!room || room.status !== "ended") return;
+      playAgain(room, io);
     });
 
     // ─── Chat / Guess ──────────────────────────────────────────
@@ -157,7 +152,6 @@ module.exports = function registerHandlers(io) {
     socket.on("disconnect", () => {
       const { roomId, username } = socket.data;
       if (!roomId) return;
-
       const room = removePlayer(roomId, socket.id);
       if (!room) return;
 
@@ -175,11 +169,7 @@ module.exports = function registerHandlers(io) {
       } else {
         io.to(roomId).emit("player_disconnected", {
           username,
-          players: room.players.map(({ username, score, connected }) => ({
-            username,
-            score,
-            connected,
-          })),
+          players: room.players.map(({ username, score, connected }) => ({ username, score, connected })),
         });
       }
     });
